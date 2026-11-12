@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lyric Animator</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:wght@700&family=Space+Grotesk:wght@500;700&family=Bebas+Neue&family=Caveat:wght@600&family=DM+Serif+Display&family=Orbitron:wght@700&family=Permanent+Marker&family=Roboto:wght@500&display=swap">
+<style>
+/* Layout: one column. Black preview stage on top, transport under it, then settings, lyrics input and export. Deliberately single-look black. */
+:root{
+  --bg:#050506;
+  --panel:#0e0e10;
+  --line:#222226;
+  --fg:#ececee;
+  --muted:#8d8d95;
+  --accent:#9ec5ff;
+  --accent-ink:#06101f;
+  --bad:#ff8a80;
+  --font-ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{background:var(--bg)}
+body{
+  background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;line-height:1.5;
+  padding-block:20px 48px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+}
+.wrap{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+h1{font-size:22px;font-weight:800;letter-spacing:-.01em;margin:0}
+.sub{color:var(--muted);margin:2px 0 0;max-width:62ch}
+.stage{background:#000;border:1px solid var(--line);display:flex;justify-content:center;align-items:center;padding:0;min-width:0}
+canvas{display:block;max-width:100%;max-height:64vh;width:auto;height:auto;background:#000}
+.transport{display:flex;align-items:center;gap:12px;min-width:0}
+.transport input[type=range]{flex:1;min-width:0}
+.time{font-family:var(--font-mono);font-size:13px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+button,select,input,textarea{font:inherit;color:inherit}
+button{background:var(--panel);border:1px solid var(--line);padding:9px 16px;cursor:pointer;min-height:40px}
+button:hover{border-color:#3a3a40}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field>span,.label{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+select,input[type=number],input[type=file]{background:var(--panel);border:1px solid var(--line);padding:9px 10px;min-height:40px;width:100%;min-width:0}
+input[type=color]{background:var(--panel);border:1px solid var(--line);height:40px;width:100%;padding:3px}
+input[type=range]{accent-color:var(--accent)}
+.seg{display:flex}
+.seg button{flex:1;border-right-width:0}
+.seg button:last-child{border-right-width:1px}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+.check{display:flex;align-items:center;gap:8px;min-height:40px}
+.check input{accent-color:var(--accent);width:18px;height:18px}
+textarea{width:100%;min-height:210px;background:var(--panel);border:1px solid var(--line);padding:12px;font-family:var(--font-mono);font-size:13px;line-height:1.7;resize:vertical}
+.info{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+.info.bad{color:var(--bad)}
+.panel{border:1px solid var(--line);background:var(--panel);padding:16px;display:flex;flex-direction:column;gap:12px}
+.panel h2{margin:0;font-size:15px;font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.note{color:var(--muted);font-size:13px;margin:0;max-width:70ch}
+.panel textarea,.panel select{background:var(--bg)}
+.fontlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.fontlist button{text-align:left;display:flex;flex-direction:column;gap:2px;min-height:64px;padding:8px 10px;background:var(--bg)}
+.fontlist button small{font:11px var(--font-ui);color:var(--muted)}
+.fontlist button .pv{font-size:22px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+input[type=search]{background:var(--bg);border:1px solid var(--line);padding:9px 10px;min-height:40px;width:100%;min-width:0}
+@media (max-width:520px){.transport{flex-wrap:wrap}.transport input[type=range]{order:3;flex-basis:100%}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Lyric Animator</h1>
+    <p class="sub">Paste word-level eLRC, add your audio, pick an animation and export a video on a black background.</p>
+  </header>
+
+  <div class="stage"><canvas id="cv" width="1920" height="1080" aria-label="Lyric preview"></canvas></div>
+
+  <div class="transport">
+    <button id="play" class="primary" type="button">Play</button>
+    <input id="seek" type="range" min="0" max="1" step="0.01" value="0" aria-label="Seek">
+    <span class="time" id="time">0:00.00 / 0:00.00</span>
+  </div>
+
+  <div class="grid">
+    <div class="field"><span>Video shape</span>
+      <div class="seg" id="aspect">
+        <button type="button" data-a="16:9" aria-pressed="true">16:9 YouTube</button>
+        <button type="button" data-a="9:16" aria-pressed="false">9:16 Shorts</button>
+      </div>
+    </div>
+    <label class="field"><span>Look preset</span>
+      <select id="preset">
+        <option value="">Choose a look...</option>
+        <option value="ref">Red serif (like your reference)</option>
+        <option value="apple">Apple Music lyrics</option>
+        <option value="yt">YouTube captions</option>
+        <option value="neon">Neon sign</option>
+        <option value="glitch">Glitch</option>
+        <option value="rainbow">Rainbow karaoke</option>
+        <option value="chaos">Kinetic chaos</option>
+      </select>
+    </label>
+    <label class="field"><span>Animation</span>
+      <select id="anim">
+        <optgroup label="Lyric layouts">
+          <option value="apple">Apple Music scroll</option>
+          <option value="caption">YouTube captions (words appear)</option>
+          <option value="subtitle">Subtitle box (whole line)</option>
+        </optgroup>
+        <optgroup label="Classic">
+          <option value="karaoke" selected>Karaoke fill</option>
+          <option value="karaoke2">Karaoke two-tone</option>
+          <option value="fade">Fade in</option>
+          <option value="rise">Rise</option>
+          <option value="pop">Pop</option>
+          <option value="glow">Glow follow</option>
+          <option value="blur">Focus pull</option>
+          <option value="single">One word at a time</option>
+        </optgroup>
+        <optgroup label="Wild">
+          <option value="bounce">Bounce</option>
+          <option value="wavetext">Wavy letters</option>
+          <option value="cascade">Letter drop</option>
+          <option value="scatter">Scatter and assemble</option>
+          <option value="flip">Card flip</option>
+          <option value="typewriter">Typewriter</option>
+          <option value="neon">Neon flicker</option>
+          <option value="glitch">Glitch</option>
+          <option value="spotlight">Spotlight</option>
+          <option value="kinetic">Kinetic slam</option>
+        </optgroup>
+      </select>
+    </label>
+    <label class="field"><span>Colour mode</span>
+      <select id="cmode">
+        <option value="single">One colour</option>
+        <option value="word">Alternate every word</option>
+        <option value="line">Alternate every line</option>
+        <option value="time">Switch over time</option>
+        <option value="hue">Rainbow</option>
+      </select>
+    </label>
+    <label class="field"><span>Palette size</span>
+      <select id="pn"><option value="2">2 colours</option><option value="3">3 colours</option><option value="4">4 colours</option></select>
+    </label>
+    <label class="field"><span>Switch every (seconds)</span><input id="every" type="number" min="0.2" step="0.1" value="2"></label>
+    <label class="field"><span>Font</span>
+      <select id="font">
+        <option value="Inter|800">Inter</option>
+        <option value="Playfair Display|700">Playfair Display</option>
+        <option value="Space Grotesk|700">Space Grotesk</option>
+        <option value="Bebas Neue|400">Bebas Neue</option>
+        <option value="Caveat|600">Caveat</option>
+        <option value="DM Serif Display|400">DM Serif Display</option>
+        <option value="Orbitron|700">Orbitron</option>
+        <option value="Permanent Marker|400">Permanent Marker</option>
+        <option value="Roboto|500">Roboto</option>
+      </select>
+    </label>
+    <label class="field"><span>Text size</span><input id="size" type="range" min="0.05" max="0.14" step="0.005" value="0.09"></label>
+    <label class="field"><span>Colour 1</span><input id="c1" type="color" value="#ffffff"></label>
+    <label class="field"><span>Colour 2</span><input id="c2" type="color" value="#ff4d6d"></label>
+    <label class="field"><span>Colour 3</span><input id="c3" type="color" value="#ffd23f"></label>
+    <label class="field"><span>Colour 4</span><input id="c4" type="color" value="#4dd2ff"></label>
+    <label class="field"><span>Glow colour</span><input id="gcol" type="color" value="#9ec5ff"></label>
+    <label class="field"><span>Sync offset (seconds)</span><input id="offset" type="number" step="0.05" value="0"></label>
+    <label class="field"><span>Weight</span>
+      <select id="wt"><option value="">Font default</option><option value="400">Regular</option><option value="500">Medium</option><option value="700">Bold</option><option value="900">Black</option></select>
+    </label>
+    <label class="field"><span>Animation speed</span><input id="speed" type="range" min="0.4" max="2.5" step="0.1" value="1"></label>
+    <label class="field"><span>Glow strength</span><input id="glow" type="range" min="0" max="2.5" step="0.1" value="1"></label>
+    <label class="field"><span>Line spacing</span><input id="lhm" type="range" min="1" max="1.9" step="0.05" value="1.3"></label>
+    <label class="field"><span>Text width</span><input id="mw" type="range" min="0.4" max="0.95" step="0.01" value="0.84"></label>
+    <label class="field"><span>Vertical position</span><input id="ypos" type="range" min="0.15" max="0.85" step="0.01" value="0.5"></label>
+    <label class="field"><span>Background colour</span><input id="bgc" type="color" value="#000000"></label>
+    <div class="field"><span>Options</span>
+      <label class="check"><input id="upper" type="checkbox"> Uppercase</label>
+      <label class="check"><input id="parts" type="checkbox"> Particle burst on each word</label>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Fonts</h2>
+    <div class="grid">
+      <label class="field"><span>Search Google Fonts</span><input id="gfq" type="search" placeholder="Oswald, Lobster, Poppins..." autocomplete="off"></label>
+      <label class="field"><span>Add a font file (.ttf .otf .woff2)</span><input id="ffile" type="file" accept=".ttf,.otf,.woff,.woff2"></label>
+      <div class="field"><span>Fonts installed on this device</span><button id="lfont" type="button">Browse device fonts</button></div>
+    </div>
+    <div id="gfres" class="fontlist"></div>
+    <div class="info" id="fontinfo">Tap a font to preview and use it. Any Google Fonts name works, even if it is not in the list.</div>
+  </div>
+
+  <div class="panel">
+    <h2>Lyrics (eLRC)</h2>
+    <p class="note">Three formats work, and you can mix them. Standard LRC has one <code>[mm:ss.xx]</code> per line, and the words are spread evenly across it. Enhanced LRC adds <code>&lt;mm:ss.xx&gt;</code> before each word. Word-timing rows put <code>&lt;WORD:start:end|WORD:start:end&gt;</code> (seconds) under a line row.</p>
+    <textarea id="lrc" spellcheck="false" aria-label="eLRC text"></textarea>
+    <div class="info" id="parseinfo"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Audio and export</h2>
+    <label class="field"><span>Audio file (optional)</span><input id="audio" type="file" accept="audio/*"></label>
+    <div class="row" id="audioctl">
+      <button id="back" type="button">-5s</button>
+      <button id="fwd" type="button">+5s</button>
+      <label class="check">Volume <input id="vol" type="range" min="0" max="1" step="0.01" value="1" style="width:140px"></label>
+      <label class="check"><input id="mute" type="checkbox"> Mute</label>
+      <label class="check"><input id="loop" type="checkbox"> Loop</label>
+      <span class="info" id="aname">No audio loaded</span>
+    </div>
+    <label class="field"><span>Export quality</span>
+      <select id="qual"><option value="0.444">480p (fast, light)</option><option value="0.667" selected>720p</option><option value="1">1080p (heavy on phones)</option></select>
+    </label>
+    <p class="note">Without audio the preview and the export run silent on the timestamps alone. Export records the preview in real time, so keep this tab open until it finishes.</p>
+    <div class="row">
+      <button id="exp" class="primary" type="button">Export video</button>
+      <button id="cancel" type="button" hidden>Cancel</button>
+      <button id="save" type="button" hidden>Save video</button>
+    </div>
+    <div class="info" id="expinfo"></div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const SAMPLE = [
+  "[ti:Sample]",
+  "[00:00.80] <00:00.80> Hello <00:01.30> from <00:01.70> the <00:02.00> quiet <00:02.80>",
+  "[00:03.40] <00:03.40> Every <00:03.90> word <00:04.30> lands <00:04.70> right <00:05.10> on <00:05.30> time <00:06.00>",
+  "[00:06.60] <00:06.60> Black <00:07.10> screen <00:07.60> and <00:07.90> light <00:08.40> that <00:08.70> moves <00:09.50>",
+  "[00:10.20] <00:10.20> Paste <00:10.70> your <00:11.00> own <00:11.30> and <00:11.60> press <00:12.10> play <00:13.00>"
+].join("\n");
+
+/* ---------- eLRC parser ---------- */
+/* Pipe format: <WORD:start:end|WORD:start:end> with times in seconds, on its own row after a [mm:ss.xx] row. */
+function parsePipe(s, offset) {
+  s = s.trim();
+  if (s[0] !== "<" || s[s.length - 1] !== ">") return null;
+  const words = [];
+  for (const it of s.slice(1, -1).split("|")) {
+    const m = it.match(/^(.*):(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/);
+    if (!m) return null;
+    const t = parseFloat(m[2]) + offset, e = parseFloat(m[3]) + offset;
+    if (m[1].trim()) words.push({ t, e: Math.max(e, t + 0.05), text: m[1].trim() });
+  }
+  return words;
+}
+function parseLRC(text, offset) {
+  const lines = [];
+  const rows = text.split(/\r?\n/);
+  const tagRe = /<(\d+):(\d+(?:\.\d+)?)>/g;
+  for (const raw of rows) {
+    const row = raw.trim();
+    const pw = parsePipe(row, offset);
+    if (pw && lines.length) { if (pw.length) lines[lines.length - 1].words = pw; continue; }
+    const m = row.match(/^\[(\d+):(\d+(?:\.\d+)?)\]\s*(.*)$/);
+    if (!m) continue;
+    const lineT = +m[1] * 60 + parseFloat(m[2]) + offset;
+    const rest = m[3];
+    const pr = parsePipe(rest, offset);
+    if (pr && pr.length) { lines.push({ start: lineT, words: pr }); continue; }
+    const events = [];
+    let last = 0, cur = lineT, mm;
+    tagRe.lastIndex = 0;
+    while ((mm = tagRe.exec(rest))) {
+      events.push({ t: cur, text: rest.slice(last, mm.index) });
+      cur = +mm[1] * 60 + parseFloat(mm[2]) + offset;
+      last = mm.index + mm[0].length;
+    }
+    events.push({ t: cur, text: rest.slice(last) });
+    const hasTags = events.length > 1;
+    const words = [];
+    if (hasTags) {
+      for (let i = 0; i < events.length; i++) {
+        const parts = events[i].text.trim().split(/\s+/).filter(Boolean);
+        if (!parts.length) continue;
+        const s = events[i].t;
+        const e = i + 1 < events.length ? events[i + 1].t : null;
+        const dur = e == null ? null : Math.max(0.05, e - s);
+        parts.forEach((p, k) => {
+          const ws = dur == null ? s + k * 0.35 : s + (dur * k) / parts.length;
+          const we = dur == null ? null : s + (dur * (k + 1)) / parts.length;
+          words.push({ t: ws, e: we, text: p });
+        });
+      }
+    } else {
+      const parts = rest.trim().split(/\s+/).filter(Boolean);
+      parts.forEach(p => words.push({ t: lineT, e: null, text: p, plain: true }));
+    }
+    if (!words.length) continue;
+    lines.push({ start: lineT, words });
+  }
+  lines.sort((a, b) => a.start - b.start);
+  lines.forEach((ln, i) => {
+    const next = lines[i + 1] ? lines[i + 1].start : null;
+    if (ln.words[0].plain) {
+      const chars = ln.words.reduce((s, w) => s + w.text.length, 0) || 1;
+      const room = (next == null ? Infinity : next - ln.start) - 0.1;
+      const span = Math.max(0.5, Math.min(room, Math.max(1.2, chars * 0.085)));
+      let acc = 0;
+      ln.words.forEach(w => { w.t = ln.start + (span * acc) / chars; acc += w.text.length; w.e = ln.start + (span * acc) / chars; });
+      ln.plain = true;
+    } else {
+      ln.words.forEach((w, k) => {
+        if (w.e == null) {
+          const nw = ln.words[k + 1];
+          w.e = nw ? nw.t : Math.min(next == null ? w.t + 0.6 : next, w.t + 0.8);
+        }
+      });
+    }
+    ln.end = ln.words[ln.words.length - 1].e;
+    ln.until = Math.min(next == null ? ln.end + 1.5 : next, ln.end + 1.5);
+  });
+  return lines;
+}
+
+/* ---------- state ---------- */
+const cv = $("cv"), ctx = cv.getContext("2d");
+const S = {
+  lines: [], flat: [], lastEnd: 0, aspect: "16:9", anim: "karaoke",
+  fontFam: "Inter", fontW: 800, size: 0.09, gcol: "#9ec5ff",
+  cols: ["#ffffff", "#ff4d6d", "#ffd23f", "#4dd2ff"], pn: 2, cmode: "single", every: 2,
+  particles: false, upper: false, offset: 0,
+  speed: 1, glow: 1, wOverride: "", lhm: 1.3, mw: 0.84, ypos: 0.5, bg: "#000000", q: 0.667
+};
+const layoutCache = new Map();
+
+function reparse() {
+  layoutCache.clear();
+  const info = $("parseinfo");
+  S.lines = parseLRC($("lrc").value, S.offset);
+  S.flat = [];
+  let gi = 0;
+  S.lines.forEach((l, li) => l.words.forEach(w => { w.li = li; w.gi = gi++; S.flat.push(w); }));
+  S.flat.sort((a, b) => a.t - b.t);
+  S.lastEnd = S.lines.length ? Math.max(...S.lines.map(l => l.end)) : 0;
+  if (!S.lines.length) {
+    info.className = "info bad";
+    info.textContent = "No timed lines found. Each line needs a tag like [00:12.34].";
+  } else {
+    info.className = "info";
+    const lo = S.lines.filter(l => l.plain).length;
+    info.textContent = S.lines.length + " lines, " + S.flat.length + " words, ends at " + fmt(S.lastEnd) +
+      (lo ? ". " + lo + " lines have no word times, so words are spread evenly." : ".");
+  }
+  syncDuration();
+}
+function fmt(t) {
+  t = Math.max(0, t || 0);
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return m + ":" + (s < 10 ? "0" : "") + s.toFixed(2);
+}
+/* ---------- helpers ---------- */
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const easeOut = x => 1 - Math.pow(1 - clamp(x), 3);
+const easeIO = x => { x = clamp(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const easeBack = x => { x = clamp(x); const c = 1.70158; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const rnd = s => { const x = Math.sin(s * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
+function colA(c, a) {
+  if (c[0] === "#") { const n = parseInt(c.slice(1), 16); return "rgba(" + (n >> 16) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")"; }
+  return "hsla(" + c + "," + a + ")";
+}
+function colorOf(w, t) {
+  const P = S.cols.slice(0, S.pn);
+  switch (S.cmode) {
+    case "word": return P[w.gi % P.length];
+    case "line": return P[w.li % P.length];
+    case "time": return P[Math.floor(Math.max(0, t) / S.every) % P.length];
+    case "hue": return ((t * 40 + w.gi * 28) % 360).toFixed(0) + ",95%,66%";
+    default: return P[0];
+  }
+}
+const glowOf = c => S.cmode === "single" ? S.gcol : c;
+const fontStr = px => (S.wOverride || S.fontW) + " " + px + "px '" + S.fontFam + "', sans-serif";
+const label = w => S.upper ? w.toUpperCase() : w;
+const basepx = k => Math.round(Math.min(cv.width, cv.height) * S.size * (k || 1));
+
+function setAspect(a) {
+  S.aspect = a;
+  const R = typeof exporting !== "undefined" && exporting ? S.q : 0.5;
+  const ev = v => Math.round(v / 2) * 2;
+  cv.width = ev((a === "16:9" ? 1920 : 1080) * R);
+  cv.height = ev((a === "16:9" ? 1080 : 1920) * R);
+  layoutCache.clear();
+  document.querySelectorAll("#aspect button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.a === a)));
+  draw();
+}
+
+/* ---------- layout ---------- */
+function wrapRows(i, px, maxW) {
+  ctx.font = fontStr(px);
+  const space = ctx.measureText(" ").width * 1.1, rows = [[]], widths = [0];
+  S.lines[i].words.forEach(w => {
+    const wd = ctx.measureText(label(w.text)).width;
+    let r = rows.length - 1;
+    const add = (rows[r].length ? space : 0) + wd;
+    if (widths[r] + add > maxW && rows[r].length) { rows.push([]); widths.push(0); r++; }
+    widths[r] += (rows[r].length ? space : 0) + wd;
+    rows[r].push({ w, wd });
+  });
+  return { rows, widths, space };
+}
+function layoutLine(i, scale) {
+  const W = cv.width, H = cv.height, px = basepx(scale);
+  const key = ["L", i, W, px, S.fontFam, S.upper].join("|");
+  if (layoutCache.has(key)) return layoutCache.get(key);
+  const { rows, widths, space } = wrapRows(i, px, W * S.mw);
+  const lh = px * S.lhm, top = H * S.ypos - ((rows.length - 1) * lh) / 2, items = [];
+  rows.forEach((row, r) => {
+    let x = (W - widths[r]) / 2;
+    row.forEach(it => { items.push({ w: it.w, x, y: top + r * lh, wd: it.wd }); x += it.wd + space; });
+  });
+  const out = { px, items };
+  layoutCache.set(key, out);
+  return out;
+}
+function layoutAll(px) {
+  const W = cv.width, key = ["A", W, px, S.fontFam, S.upper, S.lines.length].join("|");
+  if (layoutCache.has(key)) return layoutCache.get(key);
+  const lh = px * S.lhm, gap = px * 0.55, blocks = [];
+  let y = 0;
+  S.lines.forEach((ln, i) => {
+    const { rows, space } = wrapRows(i, px, W * (S.mw - 0.02));
+    const items = [];
+    rows.forEach((row, r) => {
+      let x = W * 0.09;
+      row.forEach(it => { items.push({ w: it.w, x, y: r * lh + lh / 2, wd: it.wd }); x += it.wd + space; });
+    });
+    const h = rows.length * lh;
+    blocks.push({ top: y, h, mid: y + h / 2, items });
+    y += h + gap;
+  });
+  const out = { px, blocks };
+  layoutCache.set(key, out);
+  return out;
+}
+function activeLine(t) {
+  let idx = -1;
+  for (let i = 0; i < S.lines.length; i++) { if (S.lines[i].start - 0.3 <= t) idx = i; else break; }
+  if (idx < 0) return -1;
+  return t < S.lines[idx].until ? idx : -1;
+}
+
+/* ---------- basic word modes ---------- */
+function drawWord(it, t, px, alpha) {
+  const w = it.w, age = t - w.t, dur = Math.max(0.05, w.e - w.t), txt = label(w.text);
+  const x = it.x, y = it.y, a = S.anim, c = colorOf(w, t);
+  ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = fontStr(px);
+  if (a === "karaoke" || a === "karaoke2") {
+    const two = a === "karaoke2";
+    ctx.fillStyle = two ? colA(S.cols[0], alpha) : colA(S.cols[0], 0.22 * alpha);
+    ctx.fillText(txt, x, y);
+    const p = clamp(age / dur);
+    if (p > 0) {
+      ctx.save(); ctx.beginPath(); ctx.rect(x - 4, y - px, it.wd * p + 4, px * 2); ctx.clip();
+      ctx.fillStyle = colA(two ? S.cols[1] : c, alpha); ctx.fillText(txt, x, y); ctx.restore();
+    }
+    return;
+  }
+  if (a === "glow") {
+    const act = age >= 0 && age < dur + 0.15;
+    ctx.save();
+    if (age < 0) ctx.fillStyle = colA(c, 0.25 * alpha);
+    else if (act) { ctx.shadowColor = glowOf(c); ctx.shadowBlur = px * 0.5 * S.glow; ctx.fillStyle = colA(c, alpha); }
+    else ctx.fillStyle = colA(c, 0.8 * alpha);
+    ctx.fillText(txt, x, y); ctx.restore();
+    return;
+  }
+  if (a === "fade" || a === "rise" || a === "pop" || a === "blur") {
+    if (age < 0) return;
+    const sage = age * S.speed;
+    ctx.save();
+    if (a === "fade") { ctx.fillStyle = colA(c, clamp(sage / 0.3) * alpha); ctx.fillText(txt, x, y); }
+    else if (a === "rise") {
+      ctx.fillStyle = colA(c, clamp(sage / 0.25) * alpha);
+      ctx.fillText(txt, x, y + (1 - easeOut(sage / 0.45)) * px * 0.6);
+    } else if (a === "pop") {
+      const s = 0.55 + 0.45 * easeBack(sage / 0.38);
+      ctx.translate(x + it.wd / 2, y); ctx.scale(s, s);
+      ctx.fillStyle = colA(c, clamp(sage / 0.15) * alpha); ctx.fillText(txt, -it.wd / 2, 0);
+    } else {
+      if ("filter" in ctx) ctx.filter = "blur(" + ((1 - easeOut(sage / 0.5)) * px * 0.2).toFixed(1) + "px)";
+      ctx.fillStyle = colA(c, clamp(sage / 0.35) * alpha); ctx.fillText(txt, x, y);
+    }
+    ctx.restore();
+    return;
+  }
+  drawWordFx(it, t, px, alpha, c);
+}
+/* ---------- effect word modes ---------- */
+function letters(txt, x) {
+  const out = []; let acc = 0;
+  for (let i = 0; i < txt.length; i++) {
+    const ch = txt[i], wd = ctx.measureText(ch).width;
+    out.push({ ch, x: x + ctx.measureText(txt.slice(0, i)).width, wd }); acc += wd;
+  }
+  return out;
+}
+function drawWordFx(it, t, px, alpha, c) {
+  const w = it.w, raw = t - w.t, age = raw * S.speed, dur = Math.max(0.05, w.e - w.t), txt = label(w.text);
+  const x = it.x, y = it.y, a = S.anim, cx = x + it.wd / 2;
+  ctx.save();
+  if (a === "bounce") {
+    if (age >= 0) {
+      const yo = -px * 0.7 * Math.exp(-age * 5) * Math.abs(Math.cos(age * 13)) + Math.sin(t * 3 + x * 0.01) * px * 0.04;
+      ctx.fillStyle = colA(c, clamp(age / 0.1) * alpha); ctx.fillText(txt, x, y + yo);
+    }
+  } else if (a === "glitch") {
+    if (age >= 0) {
+      const g = age < 0.4 ? 1 - age / 0.4 : 0, step = Math.floor(t * 30);
+      const d = (rnd(step + w.gi) - 0.5) * px * 0.35 * g, yj = (rnd(step * 3 + w.gi) - 0.5) * px * 0.12 * g;
+      if (g > 0) {
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = "rgba(255,0,70," + alpha + ")"; ctx.fillText(txt, x - d - px * 0.04, y + yj);
+        ctx.fillStyle = "rgba(0,230,255," + alpha + ")"; ctx.fillText(txt, x + d + px * 0.04, y - yj);
+        ctx.globalCompositeOperation = "source-over";
+      }
+      ctx.fillStyle = colA(c, alpha); ctx.fillText(txt, x + d * 0.3, y);
+    }
+  } else if (a === "neon") {
+    if (age >= 0) {
+      const fl = age < 0.55 ? (rnd(Math.floor(age * 36) + w.gi) > 0.35 ? 1 : 0.15) : 1;
+      ctx.shadowColor = glowOf(c); ctx.shadowBlur = px * 0.45 * S.glow;
+      ctx.fillStyle = colA(c, fl * alpha); ctx.fillText(txt, x, y); ctx.fillText(txt, x, y);
+      ctx.shadowBlur = 0; ctx.fillStyle = "rgba(255,255,255," + 0.55 * fl * alpha + ")"; ctx.fillText(txt, x, y);
+    }
+  } else if (a === "typewriter") {
+    if (raw >= 0) {
+      const n = Math.ceil(clamp(raw / Math.max(0.12, Math.min(dur * 0.9, 0.5))) * txt.length);
+      ctx.fillStyle = colA(c, alpha); ctx.fillText(txt.slice(0, n), x, y);
+      if (raw < dur) { const cxp = x + ctx.measureText(txt.slice(0, n)).width + px * 0.05; ctx.fillRect(cxp, y - px * 0.4, px * 0.07, px * 0.8); }
+    }
+  } else if (a === "cascade" || a === "scatter" || a === "wavetext") {
+    const L = letters(txt, x);
+    L.forEach((l, i) => {
+      ctx.save();
+      let la, ox = 0, oy = 0, rot = 0, al = 1;
+      if (a === "cascade") {
+        la = age - i * 0.035; if (la < 0) { ctx.restore(); return; }
+        const q = clamp(la / 0.5); oy = -px * 1.4 * (1 - easeBack(q)); al = clamp(la / 0.12);
+      } else if (a === "scatter") {
+        la = age; if (la < 0) { ctx.restore(); return; }
+        const e = easeOut(la / 0.7);
+        ox = (rnd(w.gi * 7 + i) - 0.5) * px * 9 * (1 - e); oy = (rnd(w.gi * 13 + i) - 0.5) * px * 6 * (1 - e);
+        rot = (rnd(w.gi * 3 + i) - 0.5) * 4 * (1 - e); al = clamp(la / 0.25);
+      } else {
+        al = age < 0 ? 0.18 : clamp(0.18 + age / 0.3);
+        oy = Math.sin(t * 4 + i * 0.6 + w.gi * 0.5) * px * 0.12;
+      }
+      ctx.translate(l.x + l.wd / 2 + ox, y + oy); ctx.rotate(rot);
+      ctx.fillStyle = colA(c, al * alpha); ctx.fillText(l.ch, -l.wd / 2, 0);
+      ctx.restore();
+    });
+  } else if (a === "flip") {
+    if (age >= 0) {
+      const e = easeOut(age / 0.5);
+      ctx.translate(cx, y); ctx.scale(1, Math.max(0.001, Math.cos((1 - e) * 1.5708)));
+      ctx.fillStyle = colA(c, e * alpha); ctx.fillText(txt, -it.wd / 2, 0);
+    }
+  } else if (a === "spotlight") {
+    const act = raw >= 0 && raw < dur;
+    if (act) {
+      const s = 1 + 0.12 * easeOut(raw / 0.2);
+      ctx.translate(cx, y); ctx.scale(s, s);
+      ctx.shadowColor = glowOf(c); ctx.shadowBlur = px * 0.6 * S.glow;
+      ctx.fillStyle = colA(c, alpha); ctx.fillText(txt, -it.wd / 2, 0);
+    } else {
+      ctx.fillStyle = colA(c, (raw < 0 ? 0.15 : 0.5) * alpha); ctx.fillText(txt, x, y);
+    }
+  }
+  ctx.restore();
+}
+function particles(it, t, px, c) {
+  const w = it.w, age = t - w.t, life = 0.9;
+  if (age < 0 || age > life) return;
+  const cx = it.x + it.wd / 2, cy = it.y, q = age / life;
+  ctx.save();
+  for (let k = 0; k < 16; k++) {
+    const ang = rnd(w.gi * 31 + k) * 6.2832, sp = px * (0.7 + rnd(w.gi * 17 + k * 3) * 1.6), d = easeOut(q) * sp;
+    ctx.fillStyle = colA(glowOf(c), 1 - q);
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(ang) * d, cy + Math.sin(ang) * d + q * px * 0.35, Math.max(0.5, px * 0.055 * (1 - q) * (0.6 + rnd(k + w.gi))), 0, 6.2832);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ---------- line / screen modes ---------- */
+function currentWord(t) {
+  let cur = null;
+  for (const w of S.flat) { if (w.t <= t) cur = w; else break; }
+  return cur;
+}
+function drawSingle(t, kinetic) {
+  const cur = currentWord(t);
+  if (!cur || t > cur.e + 0.35) return;
+  const W = cv.width, H = cv.height, age = t - cur.t, out = clamp((t - cur.e) / 0.35), c = colorOf(cur, t);
+  let px = basepx(kinetic ? 1.5 + rnd(cur.gi * 5) * 0.9 : 1.7);
+  ctx.save();
+  ctx.font = fontStr(px); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  let cx = W / 2, cy = H / 2, s, rot = 0;
+  if (kinetic) {
+    const decay = Math.exp(-age * 14);
+    s = 1 + 1.6 * decay; rot = (rnd(cur.gi * 9) - 0.5) * 0.16;
+    cx += (rnd(Math.floor(t * 60)) - 0.5) * px * 0.08 * Math.exp(-age * 9) + (rnd(cur.gi * 2) - 0.5) * W * 0.12;
+    cy += (rnd(Math.floor(t * 60) + 5) - 0.5) * px * 0.08 * Math.exp(-age * 9) + (rnd(cur.gi * 4) - 0.5) * H * 0.18;
+    if (age < 0.45) {
+      ctx.strokeStyle = colA(glowOf(c), (1 - age / 0.45) * 0.8); ctx.lineWidth = px * 0.06 * (1 - age / 0.45) + 1;
+      ctx.beginPath(); ctx.arc(cx, cy, age * px * 7, 0, 6.2832); ctx.stroke();
+    }
+  } else s = 0.7 + 0.3 * easeBack(age / 0.3);
+  ctx.translate(cx, cy); ctx.rotate(rot); ctx.scale(s, s);
+  ctx.shadowColor = glowOf(c); ctx.shadowBlur = px * 0.25 * S.glow * (1 - clamp(age / Math.max(0.2, cur.e - cur.t)));
+  ctx.fillStyle = colA(c, clamp(age / 0.08) * (1 - out));
+  ctx.fillText(label(cur.text), 0, 0);
+  ctx.restore();
+}
+function drawApple(t) {
+  if (!S.lines.length) return;
+  const W = cv.width, H = cv.height, px = basepx(0.78), A = layoutAll(px);
+  let i = -1;
+  for (let k = 0; k < S.lines.length; k++) { if (S.lines[k].start <= t) i = k; else break; }
+  const ci = Math.max(i, 0), nxt = S.lines[ci + 1];
+  let cy = A.blocks[ci].mid;
+  if (nxt && i >= 0) cy += (A.blocks[ci + 1].mid - cy) * easeIO((t - (nxt.start - 0.5)) / 0.5);
+  else if (i < 0 && S.lines[0]) cy -= A.blocks[0].h * (1 - easeIO(1 - clamp((S.lines[0].start - t) / 1.2))) * 0;
+  const oy = H * (S.ypos - 0.08) - cy;
+  ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = fontStr(px);
+  A.blocks.forEach((b, k) => {
+    const top = oy + b.top;
+    if (top > H + 80 || top + b.h < -80) return;
+    const d = Math.abs(b.mid - cy) / (px * 1.7);
+    const active = k === i, past = k < i;
+    const al = active ? 1 : clamp(0.55 - d * 0.14, 0.12, 0.55) * (past ? 0.8 : 1);
+    ctx.save();
+    if (!active && "filter" in ctx) ctx.filter = "blur(" + Math.min(d * px * 0.045, px * 0.18).toFixed(1) + "px)";
+    b.items.forEach(it => {
+      const w = it.w, c = colorOf(w, t), txt = label(w.text), x = it.x, y = top + it.y;
+      if (!active) { ctx.fillStyle = colA(c, al); ctx.fillText(txt, x, y); return; }
+      const p = clamp((t - w.t) / Math.max(0.05, w.e - w.t));
+      ctx.fillStyle = colA(c, 0.32); ctx.fillText(txt, x, y);
+      if (p > 0) {
+        ctx.save(); ctx.beginPath(); ctx.rect(x - 4, y - px, it.wd * p + 4, px * 2); ctx.clip();
+        if (p < 1) { ctx.shadowColor = glowOf(c); ctx.shadowBlur = px * 0.3 * S.glow; }
+        ctx.fillStyle = colA(c, 1); ctx.fillText(txt, x, y); ctx.restore();
+      }
+    });
+    ctx.restore();
+  });
+}
+function drawCaption(t, progressive) {
+  const i = activeLine(t);
+  if (i < 0) return;
+  const ln = S.lines[i], W = cv.width, H = cv.height, px = basepx(0.62);
+  ctx.save();
+  ctx.font = "500 " + px + "px Roboto, Arial, sans-serif"; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+  const maxW = W * 0.8, space = ctx.measureText(" ").width, rows = [[]]; let rw = 0;
+  ln.words.forEach(w => {
+    const wd = ctx.measureText(label(w.text)).width, add = (rows[rows.length - 1].length ? space : 0) + wd;
+    if (rw + add > maxW && rows[rows.length - 1].length) { rows.push([]); rw = 0; }
+    rw += (rows[rows.length - 1].length ? space : 0) + wd; rows[rows.length - 1].push(w);
+  });
+  const lh = px * 1.55, base = H * (S.aspect === "16:9" ? 0.87 : 0.8) - (rows.length - 1) * lh;
+  rows.forEach((row, r) => {
+    const vis = progressive ? row.filter(w => w.t <= t) : row;
+    if (!vis.length) return;
+    const text = vis.map(w => label(w.text)).join(" "), wd = ctx.measureText(text).width, y = base + r * lh;
+    const x = (W - wd) / 2;
+    ctx.fillStyle = "rgba(8,8,8,0.78)"; ctx.fillRect(x - px * 0.3, y - px * 0.62, wd + px * 0.6, px * 1.24);
+    ctx.fillStyle = colA(colorOf(vis[0], t), 1); ctx.fillText(text, x, y);
+  });
+  ctx.restore();
+}
+
+function draw() {
+  const t = player.time();
+  ctx.fillStyle = S.bg; ctx.fillRect(0, 0, cv.width, cv.height);
+  const a = S.anim;
+  if (a === "single") return drawSingle(t, false);
+  if (a === "kinetic") return drawSingle(t, true);
+  if (a === "apple") return drawApple(t);
+  if (a === "caption") return drawCaption(t, true);
+  if (a === "subtitle") return drawCaption(t, false);
+  const i = activeLine(t);
+  if (i < 0) return;
+  const ln = S.lines[i];
+  const alpha = Math.min(clamp((t - (ln.start - 0.3)) / 0.3), clamp((ln.until - t) / 0.3));
+  const L = layoutLine(i, 1);
+  if (a === "spotlight") {
+    const cw = L.items.find(it => t >= it.w.t && t < it.w.e) || L.items[0];
+    if (cw) {
+      const g = ctx.createRadialGradient(cw.x + cw.wd / 2, cw.y, 0, cw.x + cw.wd / 2, cw.y, L.px * 3.2);
+      g.addColorStop(0, colA(glowOf(colorOf(cw.w, t)), 0.32 * alpha)); g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, cv.width, cv.height);
+    }
+  }
+  L.items.forEach(it => drawWord(it, t, L.px, alpha));
+  if (S.particles) L.items.forEach(it => particles(it, t, L.px, colorOf(it.w, t)));
+}
+/* ---------- player ---------- */
+const au = new Audio();
+au.preload = "auto";
+let hasAudio = false, audioUrl = null, dragging = false;
+const player = {
+  playing: false, clock: 0, startedAt: 0, duration: 1,
+  time() {
+    if (hasAudio) return au.currentTime;
+    return this.playing ? this.clock + (performance.now() - this.startedAt) / 1000 : this.clock;
+  },
+  play() {
+    if (this.time() >= this.duration - 0.05) this.seek(0);
+    if (hasAudio) au.play().catch(() => {}); else this.startedAt = performance.now();
+    this.playing = true; $("play").textContent = "Pause";
+  },
+  pause() {
+    if (hasAudio) au.pause(); else this.clock = this.time();
+    this.playing = false; $("play").textContent = "Play";
+  },
+  seek(t) {
+    t = clamp(t, 0, this.duration);
+    if (hasAudio) au.currentTime = t; else { this.clock = t; this.startedAt = performance.now(); }
+  }
+};
+function syncDuration() {
+  player.duration = hasAudio && isFinite(au.duration) ? au.duration : Math.max(1, S.lastEnd + 1.5);
+  $("seek").max = player.duration;
+}
+au.addEventListener("loadedmetadata", syncDuration);
+au.addEventListener("ended", () => { player.playing = false; $("play").textContent = "Play"; });
+
+let exporting = false, endTimer = null;
+let dirty = true, lastDraw = 0;
+["input", "change", "click", "pointerup"].forEach(ev => document.addEventListener(ev, () => { dirty = true; }, true));
+function frame(ts) {
+  const t = player.time();
+  const busy = player.playing || exporting;
+  if (dirty || (busy && (exporting || ts - lastDraw > 33))) { draw(); lastDraw = ts; dirty = false; }
+  if (!dragging) $("seek").value = t;
+  $("time").textContent = fmt(t) + " / " + fmt(player.duration);
+  if (player.playing && !(hasAudio && au.loop && !exporting) && (t >= player.duration - 0.03 || (hasAudio && au.ended))) {
+    player.pause();
+    if (!hasAudio) player.clock = player.duration;
+    if (exporting && !endTimer) endTimer = setTimeout(() => rec && rec.state !== "inactive" && rec.stop(), 500);
+  }
+  if (exporting) $("expinfo").textContent = "Recording " + fmt(t) + " of " + fmt(player.duration) + ". Keep this tab open.";
+  requestAnimationFrame(frame);
+}
+
+/* ---------- export ---------- */
+let prevAu = null, rec = null, chunks = [], outBlob = null, outExt = "webm", cancelled = false, graph = null, wake = null;
+const lockables = () => document.querySelectorAll("#preset,#anim,#font,#size,#c1,#c2,#c3,#c4,#cmode,#pn,#every,#parts,#gcol,#upper,#offset,#lrc,#audio,#aspect button,#play,#seek,#wt,#speed,#glow,#lhm,#mw,#ypos,#bgc,#qual,#gfq,#ffile,#lfont,#back,#fwd,#vol,#mute,#loop");
+function pickMime() {
+  const opts = [["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "mp4"], ["video/mp4", "mp4"],
+    ["video/webm;codecs=vp9,opus", "webm"], ["video/webm;codecs=vp8,opus", "webm"], ["video/webm", "webm"]];
+  for (const [m, e] of opts) { if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return { m, e }; }
+  return null;
+}
+async function startExport() {
+  const info = $("expinfo");
+  if (!S.lines.length) { info.textContent = "Add timed lyrics first."; return; }
+  if (!window.MediaRecorder || !cv.captureStream) { info.textContent = "This browser cannot record video. Try Chrome on Android or desktop."; return; }
+  const pick = pickMime();
+  if (!pick) { info.textContent = "No supported video format in this browser."; return; }
+  try { await document.fonts.load(fontStr(48)); } catch (e) {}
+  player.pause(); player.seek(0);
+  exporting = true; setAspect(S.aspect);
+  prevAu = { v: au.volume, m: au.muted, l: au.loop }; au.volume = 1; au.muted = false; au.loop = false;
+  const stream = cv.captureStream(30);
+  if (hasAudio) {
+    try {
+      if (!graph) {
+        const ac = new (window.AudioContext || window.webkitAudioContext)();
+        const src = ac.createMediaElementSource(au), dest = ac.createMediaStreamDestination();
+        src.connect(ac.destination); src.connect(dest);
+        graph = { ac, dest };
+      }
+      await graph.ac.resume();
+      graph.dest.stream.getAudioTracks().forEach(tr => stream.addTrack(tr));
+    } catch (e) { info.textContent = "Audio could not be captured, exporting without sound."; }
+  }
+  chunks = []; outBlob = null; cancelled = false; endTimer = null;
+  rec = new MediaRecorder(stream, { mimeType: pick.m, videoBitsPerSecond: 8000000 });
+  outExt = pick.e;
+  rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onstop = () => {
+    exporting = false; endTimer = null; setAspect(S.aspect);
+    if (prevAu) { au.volume = prevAu.v; au.muted = prevAu.m; au.loop = prevAu.l; }
+    lockables().forEach(el => el.disabled = false);
+    $("exp").hidden = false; $("cancel").hidden = true;
+    try { wake && wake.release(); } catch (e) {}
+    if (cancelled) { info.textContent = "Export cancelled."; return; }
+    outBlob = new Blob(chunks, { type: pick.m.split(";")[0] });
+    $("save").hidden = false;
+    info.textContent = "Done. " + (outBlob.size / 1048576).toFixed(1) + " MB " + outExt.toUpperCase() + ". Tap Save video.";
+  };
+  $("save").hidden = true;
+  lockables().forEach(el => el.disabled = true);
+  $("exp").hidden = true; $("cancel").hidden = false;
+  try { if (navigator.wakeLock) wake = await navigator.wakeLock.request("screen"); } catch (e) {}
+  exporting = true;
+  rec.start(500);
+  player.play();
+}
+$("exp").onclick = startExport;
+$("cancel").onclick = () => { cancelled = true; player.pause(); if (rec && rec.state !== "inactive") rec.stop(); };
+$("save").onclick = async () => {
+  const info = $("expinfo");
+  const dl = window.claude && window.claude.use ? await window.claude.use("downloads") : null;
+  if (dl) {
+    try { await dl.save({ filename: "lyrics." + outExt, data: outBlob }); info.textContent = "Saved."; }
+    catch (e) { info.textContent = e && e.code === "declined" ? "Save cancelled. Tap Save video to try again." : "Could not save: " + ((e && e.message) || "unknown error"); }
+    return;
+  }
+  const url = URL.createObjectURL(outBlob), a = document.createElement("a");
+  a.href = url; a.download = "lyrics." + outExt; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  info.textContent = "Download started. If nothing happened, this page is running inside a sandbox that blocks downloads. Open the standalone HTML file instead.";
+};
+
+/* ---------- wiring ---------- */
+$("play").onclick = () => player.playing ? player.pause() : player.play();
+$("seek").addEventListener("input", e => { dragging = true; player.seek(+e.target.value); });
+$("seek").addEventListener("change", () => { dragging = false; });
+document.querySelectorAll("#aspect button").forEach(b => b.onclick = () => setAspect(b.dataset.a));
+$("anim").onchange = e => { S.anim = e.target.value; };
+$("font").onchange = async e => {
+  const [f, w] = e.target.value.split("|"); S.fontFam = f; S.fontW = +w; layoutCache.clear();
+  try { await document.fonts.load(fontStr(48)); } catch (err) {}
+  layoutCache.clear();
+};
+$("size").oninput = e => { S.size = +e.target.value; layoutCache.clear(); };
+["c1", "c2", "c3", "c4"].forEach((id, k) => { $(id).oninput = e => { S.cols[k] = e.target.value; }; });
+$("gcol").oninput = e => { S.gcol = e.target.value; };
+$("cmode").onchange = e => { S.cmode = e.target.value; };
+$("pn").onchange = e => { S.pn = +e.target.value; };
+$("every").oninput = e => { S.every = Math.max(0.2, parseFloat(e.target.value) || 2); };
+$("parts").onchange = e => { S.particles = e.target.checked; };
+$("upper").onchange = e => { S.upper = e.target.checked; layoutCache.clear(); };
+const PRESETS = {
+  ref: { anim: "fade", font: "Playfair Display|700", cmode: "single", c1: "#e8192c", size: "0.09", upper: false, parts: false },
+  apple: { anim: "apple", font: "Inter|800", cmode: "single", c1: "#ffffff", size: "0.08", upper: false, parts: false },
+  yt: { anim: "caption", font: "Roboto|500", cmode: "single", c1: "#ffffff", size: "0.08", upper: false, parts: false },
+  neon: { anim: "neon", font: "Orbitron|700", cmode: "word", pn: "2", c1: "#ff2bd6", c2: "#2bf3ff", size: "0.085", upper: true, parts: false },
+  glitch: { anim: "glitch", font: "Space Grotesk|700", cmode: "single", c1: "#ffffff", size: "0.1", upper: true, parts: false },
+  rainbow: { anim: "karaoke", font: "Inter|800", cmode: "hue", size: "0.09", upper: false, parts: false },
+  chaos: { anim: "kinetic", font: "Bebas Neue|400", cmode: "word", pn: "4", c1: "#ffffff", c2: "#ff4d6d", c3: "#ffd23f", c4: "#4dd2ff", size: "0.1", upper: true, parts: true }
+};
+function setCtl(id, v) {
+  const el = $(id); if (v === undefined || !el) return;
+  if (el.type === "checkbox") el.checked = !!v; else el.value = v;
+  el.dispatchEvent(new Event("input")); el.dispatchEvent(new Event("change"));
+}
+$("preset").onchange = e => {
+  const p = PRESETS[e.target.value]; if (!p) return;
+  setCtl("anim", p.anim); setCtl("font", p.font); setCtl("cmode", p.cmode); setCtl("pn", p.pn || "2");
+  setCtl("c1", p.c1); setCtl("c2", p.c2); setCtl("c3", p.c3); setCtl("c4", p.c4);
+  setCtl("size", p.size); setCtl("upper", p.upper); setCtl("parts", p.parts);
+};
+$("offset").oninput = e => { S.offset = parseFloat(e.target.value) || 0; reparse(); };
+let lrcTimer = null;
+$("lrc").addEventListener("input", () => { clearTimeout(lrcTimer); lrcTimer = setTimeout(reparse, 200); });
+$("audio").onchange = e => {
+  const f = e.target.files && e.target.files[0];
+  player.pause();
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  if (!f) { hasAudio = false; audioUrl = null; syncDuration(); return; }
+  audioUrl = URL.createObjectURL(f); au.src = audioUrl; hasAudio = true; syncDuration();
+};
+
+/* ---------- start ---------- */
+$("lrc").value = SAMPLE;
+reparse();
+setAspect(S.aspect);
+player.seek(S.lines.length ? S.lines[0].words[0].t + 1.0 : 0);
+Promise.all(["Inter", "Playfair Display", "Space Grotesk", "Bebas Neue", "Caveat", "DM Serif Display", "Orbitron", "Permanent Marker", "Roboto"].map(f => document.fonts.load("700 40px '" + f + "'").catch(() => {}))).then(() => layoutCache.clear());
+requestAnimationFrame(frame);
+/* ---------- extra controls ---------- */
+const bind = (id, fn, ev) => $(id).addEventListener(ev || "input", e => { fn(e.target); layoutCache.clear(); dirty = true; });
+bind("wt", el => { S.wOverride = el.value; }, "change");
+bind("speed", el => { S.speed = +el.value; });
+bind("glow", el => { S.glow = +el.value; });
+bind("lhm", el => { S.lhm = +el.value; });
+bind("mw", el => { S.mw = +el.value; });
+bind("ypos", el => { S.ypos = +el.value; });
+bind("bgc", el => { S.bg = el.value; });
+bind("qual", el => { S.q = +el.value; }, "change");
+
+/* ---------- audio controls ---------- */
+$("back").onclick = () => player.seek(player.time() - 5);
+$("fwd").onclick = () => player.seek(player.time() + 5);
+$("vol").oninput = e => { au.volume = +e.target.value; };
+$("mute").onchange = e => { au.muted = e.target.checked; };
+$("loop").onchange = e => { au.loop = e.target.checked; };
+$("audio").addEventListener("change", e => {
+  const f = e.target.files && e.target.files[0];
+  $("aname").textContent = f ? f.name : "No audio loaded";
+});
+
+/* ---------- fonts: Google Fonts, font files, device fonts ---------- */
+const GF = ("Roboto,Open Sans,Lato,Montserrat,Oswald,Poppins,Raleway,Playfair Display,Merriweather,Nunito,Ubuntu,Bebas Neue,Anton,Lobster,Pacifico," +
+  "Dancing Script,Caveat,Permanent Marker,Shadows Into Light,Indie Flower,Amatic SC,Abril Fatface,Righteous,Bangers,Fredoka,Comfortaa,Cinzel," +
+  "Cormorant Garamond,Crimson Text,Libre Baskerville,DM Serif Display,DM Sans,Space Grotesk,Space Mono,JetBrains Mono,Inter,Manrope,Syne,Unbounded," +
+  "Orbitron,Audiowide,Press Start 2P,VT323,Rubik,Rubik Glitch,Teko,Bungee,Staatliches,Alfa Slab One,Archivo Black,Black Ops One,Monoton,Julius Sans One," +
+  "Josefin Sans,Quicksand,Work Sans,Karla,Mulish,PT Serif,Lora,Bitter,Arvo,Zilla Slab,Yeseva One,Great Vibes,Sacramento,Satisfy,Kaushan Script,Courgette," +
+  "Cookie,Yellowtail,Parisienne,Allura,Tangerine,Italiana,Gloock,Fraunces,Instrument Serif,Bodoni Moda,Rozha One,Old Standard TT,EB Garamond,Spectral," +
+  "Noto Serif,Noto Sans,Source Sans 3,IBM Plex Sans,IBM Plex Mono,Barlow,Barlow Condensed,Exo 2,Chakra Petch,Russo One,Michroma,Tilt Neon," +
+  "Major Mono Display,Special Elite,Rock Salt,Gloria Hallelujah,Handlee,Kalam,Patrick Hand,Big Shoulders Display,Rubik Mono One,Lilita One,Luckiest Guy," +
+  "Shrikhand,Chango,Titan One,Passion One,Fugaz One,Poiret One,Limelight,Megrim,Tourney,Honk,Sixtyfour,Climate Crisis,Sora,Outfit,Lexend,Urbanist").split(",");
+const previewed = new Set();
+let deviceFonts = [];
+const fontInfo = m => { $("fontinfo").textContent = m; };
+const gfUrl = (names, q) => "https://fonts.googleapis.com/css2?" + names.map(n => "family=" + encodeURIComponent(n).replace(/%20/g, "+") + (q || "")).join("&") + "&display=swap";
+
+function loadFamily(name) {
+  return new Promise(res => {
+    const mk = q => {
+      const l = document.createElement("link");
+      l.rel = "stylesheet"; l.href = gfUrl([name], q);
+      l.onload = () => res(true);
+      l.onerror = () => { l.remove(); if (q) mk(""); else res(false); };
+      document.head.appendChild(l);
+    };
+    mk(":wght@400;700");
+  });
+}
+function previewFamilies(names) {
+  const fresh = names.filter(n => !previewed.has(n));
+  if (!fresh.length) return;
+  fresh.forEach(n => previewed.add(n));
+  const l = document.createElement("link");
+  l.rel = "stylesheet";
+  l.href = gfUrl(fresh) + "&text=" + encodeURIComponent("AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz Hello lyrics");
+  document.head.appendChild(l);
+}
+function renderFonts() {
+  const q = $("gfq").value.trim().toLowerCase(), box = $("gfres");
+  let items = (q ? GF.filter(n => n.toLowerCase().includes(q)) : GF.slice(0, 12)).slice(0, 12).map(n => ({ n, k: "gf" }));
+  const dev = (q ? deviceFonts.filter(n => n.toLowerCase().includes(q)) : deviceFonts).slice(0, 12).map(n => ({ n, k: "dev" }));
+  items = items.concat(dev);
+  if (q && !GF.some(n => n.toLowerCase() === q)) {
+    const guess = $("gfq").value.trim().replace(/\b\w/g, c => c.toUpperCase());
+    items.push({ n: guess, k: "gf", guess: true });
+  }
+  previewFamilies(items.filter(i => i.k === "gf").map(i => i.n));
+  box.textContent = "";
+  items.forEach(it => {
+    const b = document.createElement("button"); b.type = "button";
+    const pv = document.createElement("span"); pv.className = "pv"; pv.textContent = "Hello lyrics";
+    pv.style.fontFamily = "'" + it.n + "', sans-serif";
+    const sm = document.createElement("small");
+    sm.textContent = it.n + (it.k === "dev" ? " (device)" : it.guess ? " (try this name)" : "");
+    b.append(pv, sm);
+    b.onclick = () => pickFont(it.n, it.k);
+    box.appendChild(b);
+  });
+}
+function addFontOption(name, prefix, w) {
+  const sel = $("font"), val = name + "|" + w;
+  if (![...sel.options].some(o => o.value === val)) {
+    const o = document.createElement("option"); o.value = val; o.textContent = prefix + ": " + name; sel.appendChild(o);
+  }
+  sel.value = val; sel.dispatchEvent(new Event("change"));
+}
+async function pickFont(name, kind) {
+  if (kind === "gf") {
+    fontInfo("Loading " + name + "...");
+    const ok = await loadFamily(name);
+    if (!ok) { fontInfo("Google Fonts has no font called " + name + ". Check the spelling."); return; }
+    try { await document.fonts.load("700 48px '" + name + "'"); await document.fonts.load("400 48px '" + name + "'"); } catch (e) {}
+    addFontOption(name, "Google", 700);
+  } else addFontOption(name, "Device", 400);
+  fontInfo(name + " is selected. Use the Weight menu if it looks too heavy or too thin.");
+}
+$("gfq").addEventListener("input", renderFonts);
+$("ffile").onchange = async e => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  const name = f.name.replace(/\.[^.]+$/, "").replace(/[^\w\- ]+/g, " ").trim() || "Custom font";
+  try {
+    const ff = new FontFace(name, await f.arrayBuffer());
+    await ff.load(); document.fonts.add(ff);
+    addFontOption(name, "File", 400); fontInfo(name + " loaded from your file.");
+  } catch (err) { fontInfo("That font file could not be read."); }
+};
+$("lfont").onclick = async () => {
+  if (!window.queryLocalFonts) { fontInfo("This browser cannot list installed fonts. Use Add a font file instead."); return; }
+  try {
+    const list = await window.queryLocalFonts();
+    deviceFonts = [...new Set(list.map(f => f.family))].sort();
+    fontInfo(deviceFonts.length + " device fonts found. Type in the search box to filter them.");
+    renderFonts();
+  } catch (err) { fontInfo("Permission to read device fonts was not given."); }
+};
+renderFonts();
+</script>
+</html>
